@@ -69,36 +69,43 @@ def fetch_listing(session: requests.Session, url: str) -> str:
 def extract_links(page_html: str) -> List[NTItem]:
     soup = BeautifulSoup(page_html, "html.parser")
 
-    form = soup.find("form", id=re.compile(r"j_idt\d+"))
-    if not form:
-        raise RuntimeError("Não encontrei o <form> principal da página.")
-
-    form_id = form.get("id") or form.get("name")
-    if not form_id:
-        raise RuntimeError("Não encontrei o identificador do formulário JSF.")
-
-    view_state_input = soup.find("input", attrs={"name": "javax.faces.ViewState"})
-    if not view_state_input or not view_state_input.get("value"):
-        raise RuntimeError("Não encontrei o campo javax.faces.ViewState na página.")
-
     items: List[NTItem] = []
+
+    # Percorre todos os links das NT e descobre o form correto a partir do onclick
     for a in soup.select("a.btn-link"):
         raw_name = normalize_space(a.get_text(" ", strip=True))
         if not raw_name.startswith("NT "):
             continue
 
         onclick = a.get("onclick", "")
-        match = re.search(r"\{'([^']+)':'([^']+)'\}", onclick)
-        if not match:
+
+        # Ex.: mojarra.jsfcljs(document.getElementById('j_idt15'),{'j_idt15:j_idt17:0:j_idt19':'j_idt15:j_idt17:0:j_idt19'},'_blank')
+        form_match = re.search(r"getElementById\('([^']+)'\)", onclick)
+        field_match = re.search(r"\{'([^']+)':'([^']+)'\}", onclick)
+
+        if not form_match or not field_match:
             continue
+
+        form_id = form_match.group(1)
+        form = soup.find("form", id=form_id)
+        if not form:
+            continue
+
+        view_state_input = form.find("input", attrs={"name": "javax.faces.ViewState"})
+        if not view_state_input:
+            # fallback global, caso o campo esteja fora do form no HTML salvo
+            view_state_input = soup.find("input", attrs={"name": "javax.faces.ViewState"})
+
+        if not view_state_input or not view_state_input.get("value"):
+            raise RuntimeError(f"Não encontrei o javax.faces.ViewState para o form {form_id}.")
 
         items.append(
             NTItem(
                 name=raw_name,
                 form_id=form_id,
                 view_state=view_state_input["value"],
-                field_name=match.group(1),
-                field_value=match.group(2),
+                field_name=field_match.group(1),
+                field_value=field_match.group(2),
             )
         )
 
